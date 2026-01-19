@@ -6,7 +6,7 @@ const statusMessage = document.getElementById('status-message');
 const uploadSection = document.getElementById('upload-section');
 const questionsSection = document.getElementById('questions-section');
 const questionsContainer = document.getElementById('questions-container');
-const newUploadBtn = document.getElementById('new-upload-btn');
+
 
 // Event Listeners
 uploadArea.addEventListener('click', () => resumeInput.click());
@@ -14,7 +14,7 @@ uploadArea.addEventListener('dragover', handleDragOver);
 uploadArea.addEventListener('dragleave', handleDragLeave);
 uploadArea.addEventListener('drop', handleDrop);
 resumeInput.addEventListener('change', handleFileSelect);
-newUploadBtn.addEventListener('click', resetUpload);
+
 
 // Form submission
 const responsesForm = document.getElementById('responses-form');
@@ -97,41 +97,93 @@ async function handleFile(file) {
 }
 
 // Display Questions
+// Display Questions
 let currentResumeId = null;
+let allQuestions = [];
+let currentQuestionIndex = 0;
+let userResponses = [];
 
 function displayQuestions(questions, resumeId) {
-    // Store resume ID for later submission
+    // Store data
     currentResumeId = resumeId;
-
-    // Clear previous questions
-    questionsContainer.innerHTML = '';
-
-    // Create question cards with text areas
-    questions.forEach((question, index) => {
-        const card = document.createElement('div');
-        card.className = 'question-card';
-        card.style.animationDelay = `${index * 0.1}s`;
-
-        card.innerHTML = `
-            <div class="question-number">${index + 1}</div>
-            <div class="question-text">${escapeHtml(question)}</div>
-            <textarea 
-                class="response-textarea" 
-                id="response-${index}"
-                placeholder="Type your answer here..."
-                rows="5"
-                required
-            ></textarea>
-        `;
-
-        questionsContainer.appendChild(card);
-    });
+    allQuestions = questions;
+    currentQuestionIndex = 0;
+    userResponses = [];
 
     // Show questions section, hide upload section
     uploadSection.classList.add('hidden');
     questionsSection.classList.remove('hidden');
 
-    // Scroll to questions
+    // Render the first question
+    renderCurrentQuestion();
+}
+
+function renderCurrentQuestion() {
+    // Clear container
+    questionsContainer.innerHTML = '';
+
+    const question = allQuestions[currentQuestionIndex];
+    const index = currentQuestionIndex;
+
+    // Create single question card
+    const card = document.createElement('div');
+    card.className = 'question-card active';
+    // Remove animation delay for immediate feel or keep it simple
+    card.style.animationDelay = '0s';
+
+    const progressPercentage = ((index + 1) / allQuestions.length) * 100;
+
+    card.innerHTML = `
+        <div class="question-header" style="margin-bottom: 2rem;">
+            <div class="progress-wrapper" style="margin-bottom: 1rem;">
+                <div class="progress-track" style="width: 100%; height: 6px; background: #e2e8f0; border-radius: 4px; overflow: hidden;">
+                    <div class="progress-fill" style="width: ${progressPercentage}%; height: 100%; background: var(--accent-gradient); transition: width 0.5s ease;"></div>
+                </div>
+            </div>
+            <div class="question-meta" style="display: flex; justify-content: space-between; align-items: center;">
+                <span class="question-label" style="font-size: 0.75rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--accent-primary); background: #f1f5f9; padding: 4px 12px; border-radius: 20px;">
+                    Question ${index + 1} / ${allQuestions.length}
+                </span>
+                <span class="status-text" style="font-size: 0.875rem; color: var(--text-tertiary); font-weight: 500;">
+                    ${Math.round(progressPercentage)}% Completed
+                </span>
+            </div>
+        </div>
+        <div class="question-text" style="font-size: 1.5rem; margin-bottom: 2rem; color: var(--text-primary); font-weight: 600;">${escapeHtml(question)}</div>
+        <div class="input-group">
+            <textarea 
+                class="response-textarea" 
+                id="response-${index}"
+                placeholder="Type your answer here or record audio (English only)..."
+                rows="8"
+                required
+            ></textarea>
+            <button type="button" class="record-btn" onclick="toggleRecording(${index})" title="Record Audio">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 14C13.6569 14 15 12.6569 15 11V5C15 3.34315 13.6569 2 12 2C10.3431 2 9 3.34315 9 5V11C9 12.6569 10.3431 14 12 14Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M19 10V11C19 14.866 15.866 18 12 18C8.13401 18 5 14.866 5 11V10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M12 18V22M8 22H16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+        </div>
+        <input type="hidden" id="audio-${index}" value="">
+    `;
+
+    questionsContainer.appendChild(card);
+
+    // Update submit button text
+    const submitBtn = document.getElementById('submit-btn');
+    const isLast = index === allQuestions.length - 1;
+
+    // Preserve icon but change text
+    submitBtn.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16.5 5L7.5 14L3.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        ${isLast ? 'Finish & Submit' : 'Next Question'}
+    `;
+
+    // Scroll to top of questions
     questionsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -175,32 +227,221 @@ function showError(message) {
     }, 5000);
 }
 
+// Audio Recording Logic
+let mediaRecorders = {};
+let audioChunks = {};
+let webSockets = {};
+
+// Transcript storage for real-time display
+let transcripts = {};
+
+async function toggleRecording(index) {
+    const btn = document.querySelector(`#response-${index}`).parentElement.querySelector('.record-btn');
+
+    if (btn.classList.contains('recording')) {
+        await stopRecording(index);
+    } else {
+        await startRecording(index);
+    }
+}
+
+let audioContexts = {};
+let processors = {};
+let audioStreams = {};
+
+async function startRecording(index) {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioStreams[index] = stream;
+
+        // Initialize transcript storage
+        transcripts[index] = { committed: '', partial: '' };
+        const textarea = document.getElementById(`response-${index}`);
+
+        // Setup MediaRecorder for file upload (existing functionality)
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorders[index] = mediaRecorder;
+        audioChunks[index] = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                audioChunks[index].push(event.data);
+            }
+        };
+
+        // Setup AudioContext for real-time transcription (PCM)
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        audioContexts[index] = audioContext;
+
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processors[index] = processor;
+
+        // WebSocket for real-time transcription
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/transcribe`);
+        webSockets[index] = ws;
+
+        ws.onopen = () => {
+            console.log(`WebSocket connected for question ${index}`);
+            // Start processing audio once WS is open
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            console.log('Transcription event:', data);
+
+            if (data.message_type === 'partial_transcript') {
+                transcripts[index].partial = data.text;
+                updateTextarea(index);
+            } else if (data.message_type === 'committed_transcript') {
+                transcripts[index].committed += (transcripts[index].committed ? ' ' : '') + data.text;
+                transcripts[index].partial = '';
+                updateTextarea(index);
+            } else if (data.error) {
+                console.error('Transcription error:', data.error);
+                showError(`Transcription error: ${data.error}`);
+            }
+        };
+
+        processor.onaudioprocess = (e) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+
+            const inputData = e.inputBuffer.getChannelData(0);
+            // Convert Float32 to Int16 PCM
+            const pcmData = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+                pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+            }
+
+            // Convert PCM to base64
+            const base64Audio = btoa(String.fromCharCode.apply(null, new Uint8Array(pcmData.buffer)));
+
+            ws.send(JSON.stringify({
+                type: 'audio',
+                audio: base64Audio,
+                sample_rate: 16000
+            }));
+        };
+
+        mediaRecorder.onstop = async () => {
+            // Create audio blob and upload
+            const audioBlob = new Blob(audioChunks[index], { type: 'audio/webm' });
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.webm');
+
+            try {
+                const response = await fetch('/api/upload-audio', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById(`audio-${index}`).value = data.filename;
+                }
+            } catch (error) {
+                console.error('Error uploading audio:', error);
+            }
+        };
+
+        // Start recording
+        mediaRecorder.start();
+        const btn = document.querySelector(`#response-${index}`).parentElement.querySelector('.record-btn');
+        btn.classList.add('recording');
+
+    } catch (error) {
+        console.error('Error starting recording:', error);
+        showError('Could not access microphone or initialize audio context.');
+    }
+}
+
+function updateTextarea(index) {
+    const textarea = document.getElementById(`response-${index}`);
+    const { committed, partial } = transcripts[index];
+    textarea.value = committed + (partial ? (committed ? ' ' : '') + partial : '');
+    // Auto-scroll to bottom of textarea
+    textarea.scrollTop = textarea.scrollHeight;
+}
+
+async function stopRecording(index) {
+    // Stop MediaRecorder
+    if (mediaRecorders[index] && mediaRecorders[index].state !== 'inactive') {
+        mediaRecorders[index].stop();
+    }
+
+    // Stop Audio Processing
+    if (processors[index]) {
+        processors[index].disconnect();
+        delete processors[index];
+    }
+
+    if (audioContexts[index]) {
+        await audioContexts[index].close();
+        delete audioContexts[index];
+    }
+
+    if (audioStreams[index]) {
+        audioStreams[index].getTracks().forEach(track => track.stop());
+        delete audioStreams[index];
+    }
+
+    // Close WebSocket
+    if (webSockets[index]) {
+        if (webSockets[index].readyState === WebSocket.OPEN) {
+            webSockets[index].close();
+        }
+        delete webSockets[index];
+    }
+
+    const btn = document.querySelector(`#response-${index}`).parentElement.querySelector('.record-btn');
+    if (btn) btn.classList.remove('recording');
+}
+
+
 // Handle Response Submission
+// Handle Response Submission (Next or Final Submit)
 async function handleResponseSubmit(e) {
     e.preventDefault();
 
-    // Collect all responses
-    const responses = [];
-    const questionCards = document.querySelectorAll('.question-card');
+    // Get current inputs
+    const index = currentQuestionIndex;
+    const answerTextarea = document.getElementById(`response-${index}`);
+    const audioInput = document.getElementById(`audio-${index}`);
+    const answer = answerTextarea.value.trim();
+    const audioFilename = audioInput ? audioInput.value : null;
 
-    questionCards.forEach((card, index) => {
-        const questionText = card.querySelector('.question-text').textContent;
-        const answerTextarea = card.querySelector('.response-textarea');
-        const answer = answerTextarea.value.trim();
-
-        responses.push({
-            question: questionText,
-            answer: answer
-        });
-    });
-
-    // Validate all questions are answered
-    const unanswered = responses.filter(r => !r.answer).length;
-    if (unanswered > 0) {
-        showError(`Please answer all ${unanswered} remaining question(s)`);
+    // Validate
+    if (!answer && !audioFilename) {
+        showError('Please provide an answer or record a response');
         return;
     }
 
+    // Stop recording if active
+    const recordBtn = document.querySelector('.record-btn.recording');
+    if (recordBtn) {
+        await stopRecording(index);
+    }
+
+    // Store response
+    userResponses[index] = {
+        question: allQuestions[index],
+        answer: answer,
+        audio_file: audioFilename || null
+    };
+
+    // Check if there are more questions
+    if (currentQuestionIndex < allQuestions.length - 1) {
+        currentQuestionIndex++;
+        renderCurrentQuestion();
+    } else {
+        // Last question, submit everything
+        await submitAllResponses();
+    }
+}
+
+async function submitAllResponses() {
     // Show loading
     showLoading('Submitting your responses...');
 
@@ -212,7 +453,7 @@ async function handleResponseSubmit(e) {
             },
             body: JSON.stringify({
                 resume_id: currentResumeId,
-                responses: responses
+                responses: userResponses
             })
         });
 
@@ -220,12 +461,8 @@ async function handleResponseSubmit(e) {
 
         if (response.ok && data.success) {
             hideLoading();
-
-            // Hide the form
-            questionsSection.classList.add('hidden');
-
-            // Show success page
-            showSuccessPage();
+            // Show summary/success page
+            showSummaryPage();
         } else {
             hideLoading();
             showError(data.error || 'Failed to submit responses');
@@ -237,9 +474,16 @@ async function handleResponseSubmit(e) {
     }
 }
 
-function showSuccessPage() {
-    // Create success page HTML
-    const successHTML = `
+function showSummaryPage() {
+    // Remove the form submission handler effect on UI
+    // Hide the form actions
+    const formActions = document.querySelector('.form-actions');
+    if (formActions) {
+        formActions.style.display = 'none';
+    }
+
+    // Build the summary HTML
+    let summaryContent = `
         <div class="success-page">
             <div class="success-icon">
                 <svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -253,9 +497,30 @@ function showSuccessPage() {
                     </defs>
                 </svg>
             </div>
-            <h2 class="success-title">Responses Submitted Successfully!</h2>
-            <p class="success-message">Your interview practice responses have been saved.</p>
-            <button id="new-practice-btn" class="btn btn-primary">
+            <h2 class="success-title">Interview Completed!</h2>
+            <p class="success-message">Here is a summary of your Q&A session.</p>
+            
+            <div class="summary-list">
+    `;
+
+    userResponses.forEach((resp, idx) => {
+        summaryContent += `
+            <div class="summary-item">
+                <div class="summary-question">
+                    <span class="q-num">${idx + 1}.</span> ${escapeHtml(resp.question)}
+                </div>
+                <div class="summary-answer">
+                    <strong>Your Answer:</strong><br>
+                    ${escapeHtml(resp.answer)}
+                </div>
+            </div>
+        `;
+    });
+
+    summaryContent += `
+            </div>
+            
+            <button id="new-practice-btn" class="btn btn-primary" style="margin-top: 2rem;">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
@@ -264,28 +529,34 @@ function showSuccessPage() {
         </div>
     `;
 
-    // Replace questions container content
-    questionsContainer.innerHTML = successHTML;
-
-    // Hide the form actions (submit button, etc.)
-    const formActions = document.querySelector('.form-actions');
-    if (formActions) {
-        formActions.style.display = 'none';
-    }
-
-    // Show questions section
-    questionsSection.classList.remove('hidden');
+    questionsContainer.innerHTML = summaryContent;
 
     // Add event listener to new practice button
-    document.getElementById('new-practice-btn').addEventListener('click', resetUpload);
+    const newBtn = document.getElementById('new-practice-btn');
+    if (newBtn) {
+        newBtn.addEventListener('click', resetUpload);
+    }
 
-    // Scroll to success page
     questionsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function resetUpload() {
     // Reset file input
     resumeInput.value = '';
+
+    // Reset UI
+    const formActions = document.querySelector('.form-actions');
+    if (formActions) {
+        formActions.style.display = 'flex';
+        // Reset button text
+        const submitBtn = document.getElementById('submit-btn');
+        submitBtn.innerHTML = `
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M16.5 5L7.5 14L3.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Next Question
+        `;
+    }
 
     // Hide questions, show upload
     questionsSection.classList.add('hidden');
@@ -331,6 +602,39 @@ style.textContent = `
         font-family: 'Inter', sans-serif;
         font-weight: 500;
         font-size: 0.95rem;
+    }
+
+    .summary-list {
+        text-align: left;
+        margin-top: 2rem;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1.5rem;
+    }
+    .summary-item {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }
+    .summary-question {
+        font-weight: 600;
+        color: #0f172a;
+        margin-bottom: 0.5rem;
+    }
+    .summary-answer {
+        color: #334155;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        white-space: pre-wrap;
+    }
+    .q-num {
+        color: #2563eb;
+        font-weight: 700;
+        margin-right: 0.5rem;
     }
 `;
 document.head.appendChild(style);

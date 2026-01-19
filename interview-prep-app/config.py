@@ -9,13 +9,14 @@ class Config:
     
     # Database configuration - SQLite (free, serverless)
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or \
-        f'sqlite:///{os.path.join(BASE_DIR, "instance", "resumes.db")}'
+    database_url = os.environ.get('DATABASE_URL')
+    if database_url and database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+        
+    SQLALCHEMY_DATABASE_URI = database_url or \
+        f'sqlite:///{os.path.join(BASE_DIR, "instance", "interview_prep.db")}'
     
-    # Second database for responses
-    SQLALCHEMY_BINDS = {
-        'responses': f'sqlite:///{os.path.join(BASE_DIR, "instance", "responses.db")}'
-    }
+
     
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     

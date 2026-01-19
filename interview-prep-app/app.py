@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 import PyPDF2
 from models import db, Resume, Response
 from config import Config, allowed_file
+from flask_sock import Sock
+import json
+import base64
+import requests
+import websocket
 
 # Load environment variables
 load_dotenv()
@@ -12,12 +17,14 @@ load_dotenv()
 # Initialize Flask app
 app = Flask(__name__)
 app.config.from_object(Config)
+sock = Sock(app)
 
 # Initialize database
 db.init_app(app)
 
 # Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'audio'), exist_ok=True)
 os.makedirs('instance', exist_ok=True)
 
 def extract_text_from_pdf(pdf_path):
@@ -312,6 +319,138 @@ def submit_responses():
         
     except Exception as e:
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
+
+@app.route('/api/upload-audio', methods=['POST'])
+def upload_audio():
+    """Handle audio file upload"""
+    try:
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
+        
+        file = request.files['audio']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+            
+        # Save audio file
+        filename = secure_filename(f"audio_{os.urandom(8).hex()}.webm")
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], 'audio', filename)
+        file.save(filepath)
+        
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'path': f"/uploads/audio/{filename}"
+        }), 200
+        
+    except Exception as e:
+        print(f"Error uploading audio: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@sock.route('/ws/transcribe')
+def transcribe(ws):
+    """WebSocket route for real-time transcription"""
+    api_key = os.getenv('ELEVENLABS_API_KEY')
+    if not api_key:
+        ws.send(json.dumps({'error': 'ElevenLabs API key not configured'}))
+        return
+
+    # ElevenLabs WebSocket URL with scribe_v2_realtime model
+    # We use query params for configuration as per documentation
+    model_id = "scribe_v2_realtime"
+    url = f"wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id={model_id}&language_code=en"
+    
+    try:
+        # State to track if ElevenLabs WS is open
+        el_ws_ready = [False]
+        
+        def on_message(ws_client, message):
+            # Forward message from ElevenLabs to browser
+            try:
+                data = json.loads(message)
+                ws.send(json.dumps(data))
+            except Exception as e:
+                print(f"Error forwarding message: {e}")
+            
+        def on_error(ws_client, error):
+            print(f"ElevenLabs WS Error: {error}")
+            try:
+                ws.send(json.dumps({'error': str(error)}))
+            except:
+                pass
+            
+        def on_close(ws_client, close_status_code, close_msg):
+            print(f"ElevenLabs WS Closed: {close_status_code} - {close_msg}")
+            el_ws_ready[0] = False
+            
+        def on_open(ws_client):
+            print("Connected to ElevenLabs")
+            el_ws_ready[0] = True
+            
+        # Create WebSocket connection to ElevenLabs
+        import websocket
+        el_ws = websocket.WebSocketApp(
+            url,
+            header={"xi-api-key": api_key},
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+            on_open=on_open
+        )
+        
+        # Run ElevenLabs connection in a separate thread
+        import threading
+        wst = threading.Thread(target=el_ws.run_forever)
+        wst.daemon = True
+        wst.start()
+        
+        # Wait for connection to be ready (short timeout)
+        import time
+        timeout = 5
+        start_time = time.time()
+        while not el_ws_ready[0] and time.time() - start_time < timeout:
+            time.sleep(0.1)
+            
+        if not el_ws_ready[0]:
+            ws.send(json.dumps({'error': 'Failed to connect to ElevenLabs transcription service'}))
+            return
+
+        # Loop to receive audio from browser and send to ElevenLabs
+        while True:
+            data = ws.receive()
+            if data:
+                try:
+                    # Browser sends JSON with audio or control messages
+                    msg = json.loads(data)
+                    
+                    if el_ws_ready[0]:
+                        # Handle different message types from browser
+                        if 'type' in msg and msg['type'] == 'audio':
+                            # Wrap in ElevenLabs format
+                            el_msg = {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": msg['audio'],
+                                "sample_rate": msg.get('sample_rate', 16000)
+                            }
+                            el_ws.send(json.dumps(el_msg))
+                        elif 'type' in msg and msg['type'] == 'ping':
+                            pass # Keepalive
+                        else:
+                            # Forward other messages directly
+                            el_ws.send(json.dumps(msg))
+                except Exception as e:
+                    print(f"Error processing browser message: {e}")
+            else:
+                break
+                
+        el_ws.close()
+        
+    except Exception as e:
+        print(f"WebSocket Error: {str(e)}")
+        try:
+            ws.send(json.dumps({'error': str(e)}))
+        except:
+            pass
+
 
 
 # Create database tables

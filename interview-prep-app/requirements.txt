@@ -4,3 +4,9 @@ google-generativeai
 PyPDF2==3.0.1
 python-dotenv==1.0.0
 Werkzeug==3.0.1
+flask-sock
+websocket-client
+gunicorn
+psycopg2-binary
+gevent
+gevent-websocket

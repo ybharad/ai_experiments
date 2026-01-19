@@ -29,7 +29,6 @@ class Resume(db.Model):
 
 class Response(db.Model):
     """Model for storing user responses to interview questions"""
-    __bind_key__ = 'responses'
     __tablename__ = 'responses'
     
     id = db.Column(db.Integer, primary_key=True)
